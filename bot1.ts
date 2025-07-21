@@ -1,6 +1,11 @@
-// bot-fatlotus.ts con IA REACTIVA
+// bot-fatlotus.ts con IA REACTIVA y CONEXIÓN PERSISTENTE
 import { Client, GatewayIntentBits } from "discord.js";
-import { joinVoiceChannel } from "@discordjs/voice";
+import { 
+  joinVoiceChannel, 
+  createAudioPlayer,
+  VoiceConnectionStatus,
+  getVoiceConnection
+} from "@discordjs/voice";
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Client({
@@ -27,6 +32,9 @@ let conversationHistory: string[] = [];
 let lastReaction = Date.now();
 const REACTION_COOLDOWN = 30000; // 30 segundos entre reacciones
 
+// Variable para trackear la conexión de voz actual
+let currentVoiceConnection: any = null;
+
 // Playlist de Hugo con enlaces directos
 const musicaHugo = [
   { 
@@ -35,6 +43,61 @@ const musicaHugo = [
     description: "🔥 La canción más épica del power metal"
   },
 ];
+
+// ===============================
+// SISTEMA DE CONEXIÓN PERSISTENTE
+// ===============================
+function createPersistentConnection(channelId: string, guildId: string, adapterCreator: any) {
+  // Si ya hay una conexión, destruirla primero
+  if (currentVoiceConnection) {
+    currentVoiceConnection.destroy();
+  }
+
+  const connection = joinVoiceChannel({
+    channelId: channelId,
+    guildId: guildId,
+    adapterCreator: adapterCreator,
+  });
+
+  // Crear un player para mantener la conexión
+  const player = createAudioPlayer();
+  connection.subscribe(player);
+
+  // Manejar desconexiones automáticas
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    try {
+      console.log('🔄 Conexión perdida, intentando reconectar...');
+      // Intentar reconectar después de 5 segundos
+      setTimeout(() => {
+        if (connection.state.status === VoiceConnectionStatus.Disconnected) {
+          connection.rejoin();
+        }
+      }, 5000);
+    } catch (error) {
+      console.log('❌ Error al reconectar:', error);
+    }
+  });
+
+  connection.on(VoiceConnectionStatus.Ready, () => {
+    console.log('✅ Hugo conectado al canal de voz');
+  });
+
+  // Guardar la conexión actual
+  currentVoiceConnection = connection;
+  return connection;
+}
+
+// Función para desconectar del canal de voz
+function disconnectFromVoice(guildId: string) {
+  const connection = getVoiceConnection(guildId);
+  if (connection) {
+    connection.destroy();
+    currentVoiceConnection = null;
+    console.log('👋 Hugo se ha desconectado del canal de voz');
+    return true;
+  }
+  return false;
+}
 
 // Función para evitar repeticiones
 function isResponseTooSimilar(newResponse: string): boolean {
@@ -182,6 +245,38 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   // ===============================
+  // COMANDO PARA SALIRSE DEL CANAL
+  // ===============================
+  if (message.content.toLowerCase().includes('nos vamos') || 
+      message.content.toLowerCase().includes('hugo nos vamos') ||
+      message.content.toLowerCase().includes('fatlotus nos vamos') ||
+      message.content === '!leave' ||
+      message.content === '!salir') {
+    
+    const wasDisconnected = disconnectFromVoice(message.guild!.id);
+    
+    if (wasDisconnected) {
+      const despedidas = [
+        "¡Vale tetes! Me voy a seguir perfeccionando mi build. 🧙‍♂️",
+        "¡Nos vemos! Voy a actualizar mi guía de mobafire. 👋",
+        "¡Hasta luego! A ver si jugamos al Apex después. 🎮",
+        "¡Me piro! Que tengo que reorganizar mis gemas de poder. ✨"
+      ];
+      
+      const despedida = despedidas[Math.floor(Math.random() * despedidas.length)];
+      
+      setTimeout(() => {
+        message.channel.send(despedida);
+      }, 1000);
+    } else {
+      setTimeout(() => {
+        message.channel.send("¡Pero si no estoy en ningún canal, tetín! 🤔");
+      }, 1000);
+    }
+    return;
+  }
+
+  // ===============================
   // IA REACTIVA - OBSERVADOR INTELIGENTE
   // ===============================
   
@@ -217,12 +312,12 @@ client.on("messageCreate", async (message) => {
     
     // Buscar si el usuario está en un canal de voz
     if (message.member?.voice.channel) {
-      // ENTRAR AL CANAL automáticamente
-      joinVoiceChannel({
-        channelId: message.member.voice.channel.id,
-        guildId: message.guild!.id,
-        adapterCreator: message.guild!.voiceAdapterCreator,
-      });
+      // ENTRAR AL CANAL automáticamente con conexión persistente
+      createPersistentConnection(
+        message.member.voice.channel.id,
+        message.guild!.id,
+        message.guild!.voiceAdapterCreator
+      );
       
       const respuestasCanal = [
         "¡Ya estoy aquí tetín! Tiro blink *se tira cubo*. 🧙‍♂️",
@@ -243,6 +338,7 @@ client.on("messageCreate", async (message) => {
     }
     return;
   }
+
   if (message.author.username?.toLowerCase().includes('nins') || 
       message.author.username?.toLowerCase().includes('ismael')) {
     
@@ -294,7 +390,9 @@ client.on("messageCreate", async (message) => {
     !message.content.startsWith("!gema") &&
     !message.content.startsWith("!music") &&
     !message.content.startsWith("!musica") &&
-    !message.content.startsWith("!playlist")
+    !message.content.startsWith("!playlist") &&
+    !message.content.startsWith("!leave") &&
+    !message.content.startsWith("!salir")
   )
     return;
 
@@ -312,20 +410,32 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Comando para unirse al canal de voz
+  // Comando para unirse al canal de voz con conexión persistente
   if (message.content === "!join") {
     if (!message.member?.voice.channel) {
       message.reply("¡Tienes que estar en un canal de voz primero, tetín!");
       return;
     }
 
-    joinVoiceChannel({
-      channelId: message.member.voice.channel.id,
-      guildId: message.guild!.id,
-      adapterCreator: message.guild!.voiceAdapterCreator,
-    });
+    createPersistentConnection(
+      message.member.voice.channel.id,
+      message.guild!.id,
+      message.guild!.voiceAdapterCreator
+    );
 
-    message.reply("¡Ya estoy aquí tetes! 🧙‍♂️");
+    message.reply("¡Ya estoy aquí tetes! 🧙‍♂️ (Y no me voy hasta que me digáis 'nos vamos')");
+    return;
+  }
+
+  // Comando para salirse del canal manual
+  if (message.content === "!leave" || message.content === "!salir") {
+    const wasDisconnected = disconnectFromVoice(message.guild!.id);
+    
+    if (wasDisconnected) {
+      message.reply("¡Me piro tetín! 👋 Hasta la próxima. 🧙‍♂️");
+    } else {
+      message.reply("¡Pero si no estoy en ningún canal, tetín! 🤔");
+    }
     return;
   }
 
@@ -336,12 +446,12 @@ client.on("messageCreate", async (message) => {
       return;
     }
     
-    // Entrar al canal de voz
-    joinVoiceChannel({
-      channelId: message.member.voice.channel.id,
-      guildId: message.guild!.id,
-      adapterCreator: message.guild!.voiceAdapterCreator,
-    });
+    // Entrar al canal de voz con conexión persistente
+    createPersistentConnection(
+      message.member.voice.channel.id,
+      message.guild!.id,
+      message.guild!.voiceAdapterCreator
+    );
 
     const randomSong = musicaHugo[Math.floor(Math.random() * musicaHugo.length)];
     
